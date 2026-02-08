@@ -64,8 +64,9 @@ always @(edge clk_in) begin
             // also have some code that adjusts for 0 input. Potentially in rounding?
             if (product[15]) begin
                 // @TODO check exponent over/underflow (throw error if detected)
-                exponent = exponent + 1;
-                p_out = {sign, exponent, product[14:8]};
+                logic[7:0] tmp_exp;
+                tmp_exp = exponent + 1;
+                p_out <= {sign, tmp_exp, product[14:8]};
             end
             else begin
                 p_out <= {sign, exponent, product[13:7]};
