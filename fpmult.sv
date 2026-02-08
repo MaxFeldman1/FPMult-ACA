@@ -39,7 +39,7 @@ multcontrol mc (
 );
 
 // Output assembling {sign, exponent, fraction};
-always @(posedge clk_in) begin
+always @(edge clk_in) begin
     if (start_in) begin
         // $display("START_IN %d %d %d", x_in[14:7], y_in[14:7], x_in[14:7] + y_in[14:7] -2 * 127);
         $display("START_IN - SET");
@@ -48,6 +48,7 @@ always @(posedge clk_in) begin
         exponent <= x_in[14:7] + y_in[14:7] - 127;
         sign <= x_in[P+Q-1] ^ y_in[P+Q-1];
         adx <= 1;
+        valid_out <= 0;
     end
     if (done) begin 
         //$display("EXPONENT CHECK, %d", exponent-127);
@@ -104,7 +105,7 @@ fracmult fm (
 
 // Loop call fracmult module
 always @(posedge clk_in) begin
-    $display(" MULT-CONTROL ADX UPDATE: %b", adx);
+    $display(" MULT-CONTROL ADX: %b", adx);
     case (state)
         0: begin // IDLE
             ready <= 1;
