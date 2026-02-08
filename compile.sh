@@ -1,0 +1,1 @@
+verilator --binary -sv fpmult.sv fpmult_tb.sv
