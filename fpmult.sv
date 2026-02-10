@@ -23,6 +23,9 @@ logic[7:0] exponent;
 // Sign handling -> x-sign ^ y-sign
 logic sign;
 
+// Round mode
+logic[1:0] round_reg;
+
 logic[15:0] product;
 logic done;
 logic adx;
@@ -45,8 +48,9 @@ logic [6:0] mantissa_out;
 logic adv, advbar, advrd, nadvrd, rup;
 logic [8:0] rdd, bm;
 */
+
 round rd(
-    .round_in(round_in),
+    .round_in(round_reg),
     .sign(sign),
     .acc_reg(product),
     .mantissa_out(mantissa_out),
@@ -56,7 +60,6 @@ round rd(
     .advbar(advbar),
     .advrd(advrd),
     .nadvrd(nadvrd),
-    .rup(rup),
     .rdd(rdd),
     .bm(bm)
 */
@@ -71,6 +74,7 @@ always @(edge clk_in) begin
         sign <= 0;
         adx <= 0;
         valid_out <= 0;
+        round_reg <= 0;
     end
     else begin
         if (start_in) begin
@@ -78,6 +82,7 @@ always @(edge clk_in) begin
             y_fix <= {y_in[P+Q-1], {1'b1, y_in[6:0]}, y_in[14:7]};
             exponent <= x_in[14:7] + y_in[14:7] - 127;
             sign <= x_in[P+Q-1] ^ y_in[P+Q-1];
+            round_reg <= round_in;
             adx <= 1;
             valid_out <= 0;
         end
@@ -85,6 +90,7 @@ always @(edge clk_in) begin
             // @TODO we can check for exponent overflow by using increasing capacity and checking top bit
             logic [8:0] tmp_exp;
             // $display("adv advbar advrd nadvrd rup %b %b %b %b %b, \t rdd %b %b %b", adv, advbar, advrd, nadvrd, rup, rdd, bm, mantissa_out);
+            // $display("round_reg rup sh %b %b %b:%b", round_reg, rup, sh[15:8], sh[7:0]);
             tmp_exp = {1'b0, exponent} + {7'b0000000, inc_exp};
             p_out <= {sign, tmp_exp[7:0], mantissa_out};
 
@@ -222,86 +228,107 @@ module round (
     input   logic [15:0] acc_reg,
     output  logic [6:0] mantissa_out,
     output  logic [1:0] inc_exp
-/*
-    output logic adv,
-    output logic advbar,
-    output logic advrd,
-    output logic nadvrd, 
-    output logic rup,
-    output logic [8:0] rdd,
-    output logic [8:0] bm
-*/
 );
+    // relevant wires for future computation
+        logic signbar;
+        not(signbar, sign);
 
-    logic r;
-    logic g;
-    logic s;
-    assign r = acc_reg[7];
-    assign g = acc_reg[6];
-    or(s, acc_reg[0],
-            acc_reg[1],
-            acc_reg[2],
-            acc_reg[3],
-            acc_reg[4],
-            acc_reg[5]);
+        logic [1:0] round_in_bar;
+        assign round_in_bar = ~round_in;
 
-    logic adv, advbar;
-    assign adv = acc_reg[15];
-    not(advbar, adv);
+        logic r;
+        logic g;
+        logic s;
+        assign r = acc_reg[7];
+        assign g = acc_reg[6];
+        or(s, acc_reg[0],
+                acc_reg[1],
+                acc_reg[2],
+                acc_reg[3],
+                acc_reg[4],
+                acc_reg[5]);
 
-    // @TODO: we can probably get away with only storing the most significant P bits in sh.
-    // shift acc_reg left by 1 bit (if needed) so that there is a 1 in sh[15]
-    logic [15:0] sh;
-    and(sh[0], adv, acc_reg[0]); // index 0 of sh is only 1 if it is so in acc_reg and acc_reg is not advanced
-    generate
-        for (genvar i = 1; i < 16; i++) begin
-            logic tmp0, tmp1;
-            and(tmp0, adv, acc_reg[i]);
-            and(tmp1, advbar, acc_reg[i-1]);
-            or(sh[i], tmp0, tmp1);
-        end
-    endgenerate
+        logic adv, advbar;
+        assign adv = acc_reg[15];
+        not(advbar, adv);
 
-    /*
-    if (adv) {
-        round up on r & ( g | s | tiebreak )
-    }
-    else {
-        round up on g & ( s | tiebreak )
-    }
-    */
-    logic tiebreak;
-    assign tiebreak = sh[8]; // round to even
+        logic _tmp0, _tmp1;
+        logic nonzerotrail;
+        or(_tmp0, g, s);
+        and(_tmp1, adv, r);
+        or(nonzerotrail, _tmp0, _tmp1);
 
-    logic advrd; // whether we round in case of adv
-    logic nadvrd; // whether we round in case of NOT adv
+    // first renormalize
 
-    logic s_tie;
-    or(s_tie, s, tiebreak);
-    logic tmp;
-    or(tmp, g, s_tie);
-    and(advrd, r, tmp, adv);
-    and(nadvrd, g, s_tie, advbar);
+        // @NOTE: we can probably get away with only storing the most significant P bits in sh.
+        // shift acc_reg left by 1 bit (if needed) so that there is a 1 in sh[15]
+        logic [15:0] sh;
+        and(sh[0], adv, acc_reg[0]); // index 0 of sh is only 1 if it is so in acc_reg and acc_reg is not advanced
+        generate
+            for (genvar i = 1; i < 16; i++) begin
+                logic tmp0, tmp1;
+                and(tmp0, adv, acc_reg[i]);
+                and(tmp1, advbar, acc_reg[i-1]);
+                or(sh[i], tmp0, tmp1);
+            end
+        endgenerate
 
-    logic rup;  // round up
-    or(rup, advrd, nadvrd);
 
-    logic [8:0] rdd; // full mantissa in case of round up
-    assign rdd = {1'b0, sh[15:8]} + 1;
+    
+    // next we create circuit for rup signal which determines if we round up the mantissa
+        logic rup;
+        // RTN/E
+            /*
+                if (adv) {
+                    round up on r & ( g | s | tiebreak )
+                }
+                else {
+                    round up on g & ( s | tiebreak )
+                }
+            */
+            logic rup_and_RTNE;
+            logic tiebreak;
+            assign tiebreak = sh[8]; // round to even
+            logic advrd; // whether we round in case of adv
+            logic nadvrd; // whether we round in case of NOT adv
+            logic s_tie;
+            or(s_tie, s, tiebreak);
+            logic tmp;
+            or(tmp, g, s_tie);
+            and(advrd, r, tmp, adv);
+            and(nadvrd, g, s_tie, advbar);
+            logic rupRTNE;  // round up (in case of RTN/E)
+            or(rupRTNE, advrd, nadvrd);
+            and(rup_and_RTNE, rupRTNE, round_in_bar[1], round_in_bar[0]);
+        // RTZ
+            // no contribution to this circuit
+        // RD
+            logic rup_and_RD;
+            and(rup_and_RD, nonzerotrail, sign, round_in[1], round_in_bar[0]);
+        // RU
+            logic rup_and_RU;
+            and(rup_and_RU, nonzerotrail, signbar, round_in[1], round_in[0]);
 
-    logic [8:0] bm;
-    assign bm = rup ? rdd : {1'b0, sh[15:8]};
+        // final gate for rup signal
+            or(rup, rup_and_RTNE, rup_and_RD, rup_and_RU);
 
-    logic nxtadv;
-    assign nxtadv = bm[8];
+    // round + final renormalize
+        logic [8:0] rdd; // full mantissa in case of round up
+        assign rdd = {1'b0, sh[15:8]} + 1;
 
-    assign inc_exp = {1'b0, adv} + {1'b0, nxtadv};
+        logic [8:0] bm;
+        assign bm = rup ? rdd : {1'b0, sh[15:8]};
 
-    generate
-        for (genvar i = 0; i < 7; i++) begin
-            mux2 mx(bm[i+1], bm[i], nxtadv, mantissa_out[i]);
-        end
-    endgenerate
+        logic nxtadv;
+        assign nxtadv = bm[8];
+
+        assign inc_exp = {1'b0, adv} + {1'b0, nxtadv};
+
+        generate
+            for (genvar i = 0; i < 7; i++) begin
+                mux2 mx(bm[i+1], bm[i], nxtadv, mantissa_out[i]);
+            end
+        endgenerate
 
 endmodule
 

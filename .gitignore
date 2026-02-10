@@ -1,3 +1,4 @@
 obj_dir/
 *.zip
+*.txt
 gen_test
