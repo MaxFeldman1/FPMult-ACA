@@ -33,6 +33,8 @@ module fpmult_tb #(parameter int P = 8, parameter int Q = 8) ();
         .ready_out(ready_out)
     );
 
+    logic [31:0]iteration;
+
     reg [53:0] line;  // Every test vectors is exactly this long
     integer fd;  // file descriptor
     integer code, num_tests, num_wrong, num_displayed;
@@ -67,6 +69,9 @@ module fpmult_tb #(parameter int P = 8, parameter int Q = 8) ();
         while (!$feof(
             fd
         )) begin : test_loop
+
+            iteration = iteration + 1;
+
             // Get next line
             $fscanf(fd, "%x\n", line);
             round_mode = line[53:52];
@@ -103,6 +108,7 @@ module fpmult_tb #(parameter int P = 8, parameter int Q = 8) ();
                 if (num_displayed < 12) begin
                     $display("ERROR: x_in = %x, y_in = %x, expected %x, got %x", test_x, test_y,
                              test_p, p_out);
+                    $display("\tON ITERATION # %d", iteration);
                     $display(
                         "       (binary: x_in = %s%0b.%b*2^%0d, y_in = %s%0d.%b*2^%0d, expected %s%0d.%b*2^%0d, got %s%0d.%b*2^%0d)",
                         test_x[P+Q-1] ? "-" : "+", test_x[P+Q-2:P-1] == 0 ? 0 : 1, test_x[P-2:0],

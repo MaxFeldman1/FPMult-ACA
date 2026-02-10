@@ -38,6 +38,30 @@ multcontrol mc (
     .ready(ready_out)
 );
 
+
+logic [1:0] inc_exp;
+logic [6:0] mantissa_out;
+/*
+logic adv, advbar, advrd, nadvrd, rup;
+logic [8:0] rdd, bm;
+*/
+round rd(
+    .round_in(round_in),
+    .sign(sign),
+    .acc_reg(product),
+    .mantissa_out(mantissa_out),
+    .inc_exp(inc_exp)
+/*
+    .adv(adv),
+    .advbar(advbar),
+    .advrd(advrd),
+    .nadvrd(nadvrd),
+    .rup(rup),
+    .rdd(rdd),
+    .bm(bm)
+*/
+);
+
 // Output assembling {sign, exponent, fraction};
 always @(edge clk_in) begin
     if (!rst_in_N) begin
@@ -46,6 +70,7 @@ always @(edge clk_in) begin
         exponent <= 0;
         sign <= 0;
         adx <= 0;
+        valid_out <= 0;
     end
     else begin
         if (start_in) begin
@@ -57,20 +82,12 @@ always @(edge clk_in) begin
             valid_out <= 0;
         end
         else if (done) begin
-            // might have to wait to do this part until we round?
-            // have done flag sent to rounding / normalization module
-            // that module does the rounding and returns a different flag when done
-            // come back and potentially normalize again based on input?
-            // also have some code that adjusts for 0 input. Potentially in rounding?
-            if (product[15]) begin
-                // @TODO check exponent over/underflow (throw error if detected)
-                logic[7:0] tmp_exp;
-                tmp_exp = exponent + 1;
-                p_out <= {sign, tmp_exp, product[14:8]};
-            end
-            else begin
-                p_out <= {sign, exponent, product[13:7]};
-            end
+            // @TODO we can check for exponent overflow by using increasing capacity and checking top bit
+            logic [8:0] tmp_exp;
+            // $display("adv advbar advrd nadvrd rup %b %b %b %b %b, \t rdd %b %b %b", adv, advbar, advrd, nadvrd, rup, rdd, bm, mantissa_out);
+            tmp_exp = {1'b0, exponent} + {7'b0000000, inc_exp};
+            p_out <= {sign, tmp_exp[7:0], mantissa_out};
+
             oor_out <= 0;
             valid_out <= 1;
             adx <= 0;
@@ -185,11 +202,8 @@ always @(posedge clk_in) begin
     else if (computing && !done) begin
         // $display("here: %d", done);
         logic [16:0] next_acc;
-        next_acc = acc_reg;
 
-        if (acc_reg[0]) begin
-            next_acc = acc_reg + {1'b0, b_reg, 8'b0};
-        end
+        next_acc = acc_reg[0] ? acc_reg + {1'b0, b_reg, 8'b0} : acc_reg;
         acc_reg <= next_acc >> 1;
         counter <= counter - 1;
         done <= (counter == 1);
@@ -200,3 +214,110 @@ always @(posedge clk_in) begin
 end 
 
 endmodule
+
+// for now we do RTN/E
+module round (
+    input   logic [1:0] round_in,     // rounding mode specifier
+    input   logic sign,
+    input   logic [15:0] acc_reg,
+    output  logic [6:0] mantissa_out,
+    output  logic [1:0] inc_exp
+/*
+    output logic adv,
+    output logic advbar,
+    output logic advrd,
+    output logic nadvrd, 
+    output logic rup,
+    output logic [8:0] rdd,
+    output logic [8:0] bm
+*/
+);
+
+    logic r;
+    logic g;
+    logic s;
+    assign r = acc_reg[7];
+    assign g = acc_reg[6];
+    or(s, acc_reg[0],
+            acc_reg[1],
+            acc_reg[2],
+            acc_reg[3],
+            acc_reg[4],
+            acc_reg[5]);
+
+    logic adv, advbar;
+    assign adv = acc_reg[15];
+    not(advbar, adv);
+
+    // @TODO: we can probably get away with only storing the most significant P bits in sh.
+    // shift acc_reg left by 1 bit (if needed) so that there is a 1 in sh[15]
+    logic [15:0] sh;
+    and(sh[0], adv, acc_reg[0]); // index 0 of sh is only 1 if it is so in acc_reg and acc_reg is not advanced
+    generate
+        for (genvar i = 1; i < 16; i++) begin
+            logic tmp0, tmp1;
+            and(tmp0, adv, acc_reg[i]);
+            and(tmp1, advbar, acc_reg[i-1]);
+            or(sh[i], tmp0, tmp1);
+        end
+    endgenerate
+
+    /*
+    if (adv) {
+        round up on r & ( g | s | tiebreak )
+    }
+    else {
+        round up on g & ( s | tiebreak )
+    }
+    */
+    logic tiebreak;
+    assign tiebreak = sh[8]; // round to even
+
+    logic advrd; // whether we round in case of adv
+    logic nadvrd; // whether we round in case of NOT adv
+
+    logic s_tie;
+    or(s_tie, s, tiebreak);
+    logic tmp;
+    or(tmp, g, s_tie);
+    and(advrd, r, tmp, adv);
+    and(nadvrd, g, s_tie, advbar);
+
+    logic rup;  // round up
+    or(rup, advrd, nadvrd);
+
+    logic [8:0] rdd; // full mantissa in case of round up
+    assign rdd = {1'b0, sh[15:8]} + 1;
+
+    logic [8:0] bm;
+    assign bm = rup ? rdd : {1'b0, sh[15:8]};
+
+    logic nxtadv;
+    assign nxtadv = bm[8];
+
+    assign inc_exp = {1'b0, adv} + {1'b0, nxtadv};
+
+    generate
+        for (genvar i = 0; i < 7; i++) begin
+            mux2 mx(bm[i+1], bm[i], nxtadv, mantissa_out[i]);
+        end
+    endgenerate
+
+endmodule
+
+
+// s ? a : b
+module mux2 (
+    input a,
+    input b,
+    input s,
+  /* verilator lint_off UNOPTFLAT */
+    output y
+  /* verilator lint_on UNOPTFLAT */
+);
+  logic t_1, t_2, s_bar;
+  and (t_1, a, s);
+  and (t_2, b, s_bar);
+  not (s_bar, s);
+  or (y, t_1, t_2);
+endmodule : mux2
