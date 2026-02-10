@@ -19,6 +19,7 @@ logic[P+Q:0] y_fix;
 
 // Exponent adding -> x-exp + y-exp - (127 for 8 bit exponent width)
 logic [8:0] exponent;
+logic [9:0] true_exp;
 logic [7:0] fix_exp;
 logic x_hidden;
 logic y_hidden;
@@ -31,6 +32,7 @@ logic[1:0] round_reg;
 
 logic [15:0] product;
 logic [15:0] fix_prod;
+logic [6:0] mantissa_out;
 
 logic [3:0] oor_found;
 logic done;
@@ -57,14 +59,13 @@ oor_input oor (
 );
 
 
-logic [1:0] inc_exp;
-logic [6:0] mantissa_out;
 round rd(
     .round_in(round_reg),
     .sign(sign),
+    .exponent(exponent),
     .acc_reg(product),
     .mantissa_out(mantissa_out),
-    .inc_exp(inc_exp)
+    .true_exp(true_exp)
 );
 
 
@@ -104,24 +105,14 @@ always @(posedge clk_in) begin
                 valid_out <= 1;
                 adx <= 0;
             end else begin
-                logic [9:0] tmp_exp;
-                tmp_exp = {1'b0, exponent} + {8'b00000000, inc_exp};
-                if (tmp_exp > 381) begin
+                if (true_exp > 381) begin
                     fix_exp = '1;
-                end else if (tmp_exp < 127) begin
+                end else if (true_exp < 127) begin
                     fix_exp = '0;
                 end else begin
-                    fix_exp = tmp_exp[7:0] - 127;
+                    fix_exp = true_exp[7:0] - 127;
                 end
-                /*
-                if (product[15]) begin
-                    fix_exp += 1;
-                    p_out <= {sign, fix_exp, product[14:8]};
-                end
-                else begin
-                    p_out <= {sign, fix_exp, product[13:7]};
-                end
-                */
+                
                 p_out <= {sign, fix_exp, mantissa_out};
                 if (product == '0) begin
                     if (fix_exp == '0) begin
@@ -334,9 +325,10 @@ endmodule
 module round (
     input   logic [1:0] round_in,     // rounding mode specifier
     input   logic sign,
+    input   logic [8:0] exponent,
     input   logic [15:0] acc_reg,
     output  logic [6:0] mantissa_out,
-    output  logic [1:0] inc_exp
+    output  logic [9:0] true_exp
 );
     // relevant wires for future computation
         logic signbar;
@@ -431,29 +423,33 @@ module round (
         logic nxtadv;
         assign nxtadv = bm[8];
 
-        assign inc_exp = {1'b0, adv} + {1'b0, nxtadv};
+        logic [9:0] unround_exp;
+        assign unround_exp = {1'b0, exponent} + {9'b0, adv} + {9'b0, nxtadv};
 
-        generate
-            for (genvar i = 0; i < 7; i++) begin
-                mux2 mx(bm[i+1], bm[i], nxtadv, mantissa_out[i]);
-            end
-        endgenerate
+        logic [6:0] normal_mantissa;
+        assign normal_mantissa = nxtadv ? bm[7:1] : bm[6:0];
+    
+    // round overflow
+        logic overflow;
+        assign overflow = (unround_exp > 381);
+        
+        logic fm_on_overflow; // signal for if we round down to finite_max upon overflow
+        // table of how fm is determined by rounding mode
+            // RTN/E: always false
+            // RTZ: always true
+            // RD: when sign positive
+            // RU: when sign negative
+        logic fm_rtz;
+        logic fm_d;
+        logic fm_u;
+        and(fm_rtz, round_in_bar[1], round_in[0]);
+        and(fm_d, signbar, round_in[1], round_in_bar[0]);
+        and(fm_u, sign, round_in[1], round_in[0]);
+        or(fm_on_overflow, fm_rtz, fm_d, fm_u);
+
+        // set final output
+        assign mantissa_out = overflow ? (fm_on_overflow ? '1 : '0) : normal_mantissa;
+        assign true_exp = overflow ? (fm_on_overflow ? 381 : 382) : unround_exp; 
 
 endmodule
 
-
-// s ? a : b
-module mux2 (
-    input a,
-    input b,
-    input s,
-  /* verilator lint_off UNOPTFLAT */
-    output y
-  /* verilator lint_on UNOPTFLAT */
-);
-  logic t_1, t_2, s_bar;
-  and (t_1, a, s);
-  and (t_2, b, s_bar);
-  not (s_bar, s);
-  or (y, t_1, t_2);
-endmodule : mux2

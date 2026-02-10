@@ -54,7 +54,7 @@ module fpmult_tb #(parameter int P = 8, parameter int Q = 8) ();
 
     //initial block...this is our test simulation
     initial begin
-        fd = $fopen("allround.txt", "r");  // STUDENTS: Edit me to edit your test vector
+        fd = $fopen("basic.txt", "r");  // STUDENTS: Edit me to edit your test vector
         // Set initial values
         rst_in_N = 1;
         num_tests = 0;
@@ -105,10 +105,10 @@ module fpmult_tb #(parameter int P = 8, parameter int Q = 8) ();
             num_tests++;
             out_is_nan = oor_out[OOR_NAN] && (p_out[P+Q-2:P-1] == '1) && (p_out[P-2:0] != '0);
             if ((p_out != test_p) && !(oor[OOR_NAN] && out_is_nan)) begin
-                if (num_displayed < 12) begin
+                if (num_displayed < 120) begin
                     $display("ERROR: x_in = %x, y_in = %x, expected %x, got %x", test_x, test_y,
                              test_p, p_out);
-                    $display("\tON ITERATION # %d", iteration);
+                    $display("\tON ITERATION # %d, roundmode %d", iteration, round_mode);
                     $display(
                         "       (binary: x_in = %s%0b.%b*2^%0d, y_in = %s%0d.%b*2^%0d, expected %s%0d.%b*2^%0d, got %s%0d.%b*2^%0d)",
                         test_x[P+Q-1] ? "-" : "+", test_x[P+Q-2:P-1] == 0 ? 0 : 1, test_x[P-2:0],
